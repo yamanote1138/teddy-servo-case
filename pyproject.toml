@@ -1,12 +1,18 @@
 [project]
 name = "teddy-servo-case"
 version = "0.1.0"
-description = "Add your description here"
+description = "3D-printable SG90 servo housings for an animatronic teddy bear"
 requires-python = ">=3.12"
 dependencies = [
-    "numpy-stl>=3.2.0",
+    "build123d>=0.13.0",
     "trimesh>=4.11.2",
 ]
 
 [tool.uv]
 python-preference = "only-managed"
+
+[dependency-groups]
+dev = [
+    "manifold3d>=3.5.4",
+    "matplotlib>=3.11.2",
+]
