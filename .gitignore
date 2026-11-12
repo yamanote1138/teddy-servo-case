@@ -14,3 +14,8 @@ wheels/
 
 # Generated models and previews (rebuild with uv run eye_servo_housing.py)
 out/
+
+# Local-only
+.claude/settings.local.json
+# Third-party photo with a copyright watermark
+reference/teddyref2.jpeg

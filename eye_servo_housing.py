@@ -1,120 +1,152 @@
-"""Eye servo housing for the teddy bear animatronic (SG90, shaft out the right side).
+"""Servo housing for the teddy bear animatronic (SG90 driving a friction roller). Same part for eyes and both lips.
 
 Run: uv run eye_servo_housing.py
-Writes out/eye_servo_housing.{step,stl} and out/sg90_placed.stl (reference servo in housing coords).
+Writes out/eye_servo_housing.{step,stl}, out/roller.{step,stl}, plus out/sg90_placed.stl and
+out/roller_placed.stl (both in housing coords) for fit checks and previews.
 
-Coordinates: X runs front (tab) to back (nub), Y runs left to right (shaft side), Z is up.
-The housing floor sits at Z=0 and its front face at X=0.
+Housing coords: X runs front (tab, toward the face) to back (nub), Z is the servo shaft direction,
+Y is the remaining side. In the head, X stays face-to-back, Y is vertical, and Z runs across the head.
+The servo drops into a pocket from the top (+Z) and its ears screw to the top face. The roller sits on
+the shaft at the front end, beside the housing, and its rim drives the mechanism's pivoted wheel.
+A spring runs from the back nub straight back to a nub on the head frame.
 """
 
 from pathlib import Path
 
-import numpy as np
 import trimesh
-from build123d import Align, Box, Cone, Cylinder, Pos, Rot, export_step, export_stl
+from build123d import Align, Axis, Box, Cone, Cylinder, Pos, Rot, export_step, export_stl, fillet
 
 OUT = Path(__file__).parent / "out"
 REF_STL = Path(__file__).parent / "reference" / "sg90.stl"
+MN = (Align.MIN, Align.MIN, Align.MIN)
 
 # --- Mount interface (caliper measured off the original housing) ---
-TAB_W = 24.5  # across Y
-TAB_H = 4.0  # Z
+TAB_W = 24.5  # along Y (vertical in the head)
+TAB_H = 4.0  # along Z
 TAB_T = 7.0  # how far it sticks out the front, X
 NUB_D_BASE = 5.0
 NUB_D_TIP = 3.0
 NUB_H = 9.0
-MOUNT_SPACING = 45.0  # front face of tab to nub center, along X
-SLOT = (26.0, 4.6, 4.7)  # bear frame slot the tab slides into (w, h, depth), for reference
+MOUNT_SPACING = 45.0  # tab front face to the nub; taken here as to the nub's base on the back face
+SLOT = (26.0, 4.6, 4.7)  # frame slot the tab slides into (w, h, depth), for reference
 
-# --- Not measured yet, best guesses (see CLAUDE.md open questions) ---
-TAB_Z = None  # tab center height; None = middle of the housing
-ENVELOPE_MAX = (55.0, 40.0, 75.0)  # recorded "body" size; treated as a max envelope
+# --- Guesses, replace with calipers ---
+TAB_Z = 12.5  # tab center across the head; kept above the servo cable exit
+NUB_Z = 9.0  # nub center across the head (spring line)
+ROLLER_D = 18.0  # original bracket opening is ~20mm
+ROLLER_W = 9.0
+NUB_GROOVE_AT = 7.0  # spring-retaining groove, measured out from the nub base
+NUB_GROOVE_DEPTH = 0.4
+NUB_GROOVE_W = 1.0
+TAB_ROUND = 1.5  # rounded front edges so the unit can rock in the slot
+ENVELOPE_MAX = (55.0, 40.0, 75.0)  # old "body" note; only used as a max-size warning
 
-# --- SG90 (from reference/sg90.stl) ---
-SERVO_L = 22.7  # case length, along shaft-to-cable direction
-SERVO_W = 12.4  # case width
-SERVO_EAR_H = 16.0  # case bottom to underside of the mounting ears
-SERVO_EAR_L = 32.5
-SERVO_EAR_HOLE_SPACING = 27.5
+# --- SG90 (from reference/sg90.stl; there the ear underside is z=0, shaft points +z at x=9.9) ---
+SERVO_L = 22.7  # case length, along X here
+SERVO_W = 12.4  # case width, along Y here
+SERVO_EAR_TO_BOTTOM = 16.0  # ear underside to case bottom
+SERVO_EAR_TO_BOSS = 11.0  # ear underside to top of the gear boss
+SERVO_EAR_TO_SPLINE_TIP = 13.8
 SERVO_SHAFT_OFFSET = 5.35  # shaft axis from case center, toward the cable end
+SERVO_EAR_HOLE_SPACING = 27.5
+CABLE_NOTCH = (5.5, 9.0)  # width (Y) and height (Z, from the floor) of the cable exit through the front wall
+SPLINE_D = 4.9  # socket for the output spline (press fit, plus the horn screw)
+SCREW_D = 2.3
 
 # --- Print settings ---
 FIT = 0.3  # clearance per side around the servo case
-WALL = 2.5
 FLOOR = 2.0
-PLATE_T = 3.5  # right wall the ears screw to
 PILOT_D = 1.6  # pilot hole for the SG90's self-tapping screws
-NUB_BLOCK = 6.0  # solid rear block the nub stands on
+PILOT_DEPTH = 6.0
 
 # --- Derived layout ---
-NUB_X = MOUNT_SPACING - TAB_T
-L = NUB_X + NUB_BLOCK / 2
-W = max(TAB_W + 1.5, SERVO_EAR_H + WALL)
-H = FLOOR + SERVO_W + FIT
-SERVO_X = 20.0  # case center; leaves room for the cable bulge at the front end
-SERVO_Z = FLOOR + SERVO_W / 2  # case centerline
-tab_z = TAB_Z if TAB_Z is not None else H / 2
+L = MOUNT_SPACING - TAB_T  # body length, front face to back face
+W = TAB_W  # body height in the head
+H = FLOOR + SERVO_EAR_TO_BOTTOM  # ears sit on the top face
+CASE_X0 = 4.0  # case front end; the cable bulge pokes out the front through the notch
+CASE_X = CASE_X0 + SERVO_L / 2
+ROLLER_X = CASE_X - SERVO_SHAFT_OFFSET  # shaft (and roller) toward the front
+SHAFT_Y = W / 2
+ROLLER_Z0 = H + SERVO_EAR_TO_BOSS + 0.2  # roller inner face, just clear of the gear boss
+ROLLER_Z = ROLLER_Z0 + ROLLER_W / 2
 
 
 def build_housing():
-    mn = (Align.MIN, Align.MIN, Align.MIN)
-    shell = Box(L, W, H, align=mn)
-
-    # Pocket for the servo case, open at the top so the servo drops in
-    pocket_x0 = WALL
-    pocket_x1 = NUB_X - NUB_BLOCK / 2
-    shell -= Pos(pocket_x0, WALL, FLOOR) * Box(pocket_x1 - pocket_x0, W - WALL - PLATE_T, H, align=mn)
-
-    # U-notch through the right plate for the case; the ears sit on the plate's outer face
-    notch_l = SERVO_L + 2 * FIT
-    shell -= Pos(SERVO_X - notch_l / 2, W - PLATE_T - 1, FLOOR) * Box(notch_l, PLATE_T + 2, H, align=mn)
-
-    # Pilot holes for the ear screws
+    body = Box(L, W, H, align=MN)
+    body -= Pos(CASE_X0 - FIT, SHAFT_Y - SERVO_W / 2 - FIT, FLOOR) * Box(SERVO_L + 2 * FIT, SERVO_W + 2 * FIT, H, align=MN)
+    body -= Pos(-1, SHAFT_Y - CABLE_NOTCH[0] / 2, FLOOR) * Box(CASE_X0 + 1, CABLE_NOTCH[0], CABLE_NOTCH[1] - FLOOR, align=MN)
     for dx in (-SERVO_EAR_HOLE_SPACING / 2, SERVO_EAR_HOLE_SPACING / 2):
-        shell -= Pos(SERVO_X + dx, W - PLATE_T / 2, SERVO_Z) * Rot(90, 0, 0) * Cylinder(PILOT_D / 2, PLATE_T + 2)
+        body -= Pos(CASE_X + dx, SHAFT_Y, H) * Cylinder(PILOT_D / 2, 2 * PILOT_DEPTH)
 
-    tab = Pos(-TAB_T, (W - TAB_W) / 2, tab_z - TAB_H / 2) * Box(TAB_T, TAB_W, TAB_H, align=mn)
-    nub = Pos(NUB_X, W / 2, H) * Cone(
-        NUB_D_BASE / 2, NUB_D_TIP / 2, NUB_H, align=(Align.CENTER, Align.CENTER, Align.MIN)
-    )
-    return shell + tab + nub
+    tab = Pos(-TAB_T, (W - TAB_W) / 2, TAB_Z - TAB_H / 2) * Box(TAB_T, TAB_W, TAB_H, align=MN)
+    tab = fillet(tab.edges().filter_by(Axis.Y).filter_by_position(Axis.X, -TAB_T - 0.1, -TAB_T + 0.1), TAB_ROUND)
+    return body + tab + Pos(L, W / 2, NUB_Z) * Rot(0, 90, 0) * build_nub()
+
+
+def build_nub():
+    """Tapered nub along +Z from the origin, with a groove near the tip for the spring loop."""
+
+    def d_at(z):
+        return NUB_D_BASE + (NUB_D_TIP - NUB_D_BASE) * z / NUB_H
+
+    up = (Align.CENTER, Align.CENTER, Align.MIN)
+    z0, z1 = NUB_GROOVE_AT - NUB_GROOVE_W / 2, NUB_GROOVE_AT + NUB_GROOVE_W / 2
+    lower = Cone(d_at(0) / 2, d_at(z0) / 2, z0, align=up)
+    neck = Pos(0, 0, z0) * Cylinder(d_at(z1) / 2 - NUB_GROOVE_DEPTH, NUB_GROOVE_W, align=up)
+    upper = Pos(0, 0, z1) * Cone(d_at(z1) / 2, d_at(NUB_H) / 2, NUB_H - z1, align=up)
+    return lower + neck + upper
+
+
+def build_roller():
+    """Printed roller on the SG90 spline; groove takes an O-ring or silicone tube as the rubber tire."""
+    along = (Align.CENTER, Align.CENTER, Align.MIN)
+    r = Cylinder(ROLLER_D / 2, ROLLER_W, align=along)
+    r -= Cylinder(SPLINE_D / 2, SERVO_EAR_TO_SPLINE_TIP - SERVO_EAR_TO_BOSS - 0.2, align=along)
+    r -= Cylinder(SCREW_D / 2, ROLLER_W, align=along)
+    tire_w = ROLLER_W - 3.0
+    groove = Cylinder(ROLLER_D / 2 + 1, tire_w, align=along) - Cylinder(ROLLER_D / 2 - 1.0, tire_w, align=along)
+    return r - Pos(0, 0, 1.5) * groove
+
+
+def place(shape):
+    """Move a roller built along +Z at the origin onto the servo shaft."""
+    return Pos(ROLLER_X, SHAFT_Y, ROLLER_Z0) * shape
 
 
 def place_reference_servo():
-    """Move reference/sg90.stl into housing coords: shaft along +Y, ears on the plate face."""
+    """Move reference/sg90.stl into housing coords: same axes, ears on the top face, shaft at the front."""
     m = trimesh.load(REF_STL)
-    # In the STL: case x 3.9..26.6, width along y, shaft up +z, ear underside at z=0, cable end at -x
-    case_cx = (3.9 + 26.6) / 2
-    case_cy = (44.8 + 57.2) / 2
-    m.apply_translation([-case_cx, -case_cy, 0])
-    # ref x -> X, ref z (shaft) -> +Y, ref y -> -Z  (proper rotation, det = +1)
-    rot = np.eye(4)
-    rot[:3, :3] = [[1, 0, 0], [0, 0, 1], [0, -1, 0]]
-    m.apply_transform(rot)
-    m.apply_translation([SERVO_X, W, SERVO_Z])
+    m.apply_translation([ROLLER_X - 9.9, SHAFT_Y - (44.8 + 57.2) / 2, H])
     return m
 
 
-def check(housing_stl: Path, servo: trimesh.Trimesh):
-    h = trimesh.load(housing_stl)
-    overlap = trimesh.boolean.intersection([h, servo], engine="manifold").volume
-    b = h.bounds
+def overlap(a, b):
+    return trimesh.boolean.intersection([a, b], engine="manifold").volume
+
+
+def check(housing, servo, roller):
+    b = trimesh.util.concatenate([housing, servo, roller]).bounds
     size = b[1] - b[0]
-    print(f"Housing size (incl. tab + nub): {size[0]:.1f} x {size[1]:.1f} x {size[2]:.1f} mm")
-    print(f"Watertight: {h.is_watertight}, volume: {h.volume / 1000:.1f} cm3")
-    print(f"Servo/housing overlap: {overlap:.3f} mm3 {'OK' if overlap < 0.01 else 'COLLISION'}")
-    for name, s, mx in zip("XYZ", size, ENVELOPE_MAX):
+    print(f"Unit size with servo + roller: {size[0]:.1f} x {size[1]:.1f} x {size[2]:.1f} mm (incl. tab and nub)")
+    print(f"Watertight: housing {housing.is_watertight}, roller {roller.is_watertight}; housing {housing.volume / 1000:.1f} cm3")
+    for name, v in (("servo/housing", overlap(housing, servo)), ("roller/housing", overlap(housing, roller))):
+        print(f"{name} overlap: {v:.3f} mm3 {'OK' if v < 0.01 else 'COLLISION'}")
+    for axis, s, mx in zip("XYZ", size, ENVELOPE_MAX):
         if s > mx:
-            print(f"WARNING: {name} size {s:.1f} exceeds recorded envelope {mx}")
-    clearance = SLOT[0] - TAB_W, SLOT[1] - TAB_H
-    print(f"Tab-in-slot clearance: {clearance[0]:.1f} mm wide, {clearance[1]:.1f} mm tall")
+            print(f"WARNING: {axis} size {s:.1f} exceeds recorded envelope {mx}")
+    print(f"Roller front edge {ROLLER_X - ROLLER_D / 2:.1f} mm behind the body's front face; 180 deg sweep = {3.14159 * ROLLER_D / 2:.1f} mm of rim travel")
+    print(f"Tab-in-slot clearance: {SLOT[0] - TAB_W:.1f} mm wide, {SLOT[1] - TAB_H:.1f} mm tall")
 
 
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
     housing = build_housing()
+    roller = build_roller()
     export_step(housing, OUT / "eye_servo_housing.step")
     export_stl(housing, OUT / "eye_servo_housing.stl")
+    export_step(roller, OUT / "roller.step")
+    export_stl(roller, OUT / "roller.stl")
+    export_stl(place(roller), OUT / "roller_placed.stl")
     servo = place_reference_servo()
     servo.export(OUT / "sg90_placed.stl")
-    check(OUT / "eye_servo_housing.stl", servo)
+    check(trimesh.load(OUT / "eye_servo_housing.stl"), servo, trimesh.load(OUT / "roller_placed.stl"))
